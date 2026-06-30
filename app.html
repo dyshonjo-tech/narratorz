@@ -800,7 +800,7 @@
     progressLabel.innerHTML = `<b>Loading voice...</b>`;
     const v = GOOGLE_VOICES.find(g=>g.id === settings.googleVoiceId) || GOOGLE_VOICES[0];
     try{
-      const res = await fetch(VOICE_SERVER_URL, {
+      const res = await fetch(VOICE_SERVER_URL, {https://narratorz-voice.dyshonjo.workers.dev}
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
