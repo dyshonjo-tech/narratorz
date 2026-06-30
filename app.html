@@ -355,7 +355,7 @@
   // ---------- state ----------
   let library = [];          // [{id,title,text,lang,sourceType,wordCount,createdAt,lastIndex}]
   let settings = {
-    engine: 'good',            // 'good' = Google warm voices (default), 'system' = browser fallback
+    engine: 'good',            // Worker is live, so default to the warm Google voices
     googleVoiceId: 'en-US-Neural2-C',
     freeVoiceURI: '',
     speed: 1,
@@ -371,6 +371,7 @@
   let currentChunkIndex = 0;
   let isPlaying = false;
   let currentAudio = null;   // <audio> element for Google playback
+  let playToken = 0;         // increments each time playback (re)starts; stale fetches are ignored
 
   // ---------- DOM ----------
   const $ = id => document.getElementById(id);
@@ -732,10 +733,21 @@
 
   function stopPlayback(){
     isPlaying = false;
-    speechSynthesis.cancel();
-    if(currentAudio){ currentAudio.pause(); currentAudio = null; }
+    silenceCurrent();
     disc.classList.remove('spinning');
     playBtn.textContent = '▶';
+  }
+
+  // Hard-stop whatever is currently making sound, WITHOUT changing isPlaying.
+  // Disarms the old onended so a stopped chunk can't chain into the next one.
+  function silenceCurrent(){
+    speechSynthesis.cancel();
+    if(currentAudio){
+      currentAudio.onended = null;
+      currentAudio.pause();
+      try{ currentAudio.currentTime = 0; }catch(e){}
+      currentAudio = null;
+    }
   }
 
   function escapeHtml2(s){ return s; }
@@ -764,6 +776,8 @@
   }
 
   function playChunkOrSentence(){
+    silenceCurrent(); // kill anything already playing so voices never overlap
+    const myToken = ++playToken; // mark this as the latest playback request
     if(currentChunkIndex >= chunks.length){
       isPlaying = false; disc.classList.remove('spinning'); playBtn.textContent = '▶';
       progressLabel.innerHTML = `<b>Done.</b> That's the whole thing.`;
@@ -773,21 +787,21 @@
     const range = chunkSentenceRanges[currentChunkIndex];
     highlightSentence(range[0]);
     updateProgress();
-    if(settings.engine === 'system'){
-      playSystemChunk(chunks[currentChunkIndex], range);
+    const workerReady = VOICE_SERVER_URL && !VOICE_SERVER_URL.includes('YOUR-SUBDOMAIN');
+    if(settings.engine === 'system' || !workerReady){
+      playSystemChunk(chunks[currentChunkIndex], range, myToken);
     } else {
-      playGoogleChunk(chunks[currentChunkIndex], range);
+      playGoogleChunk(chunks[currentChunkIndex], range, myToken);
     }
   }
 
-  function playSystemChunk(text, range){
-    speechSynthesis.cancel();
+  function playSystemChunk(text, range, myToken){
     const utter = new SpeechSynthesisUtterance(text);
     const v = voices.find(v=>v.voiceURI === voiceSelect.value);
     if(v) utter.voice = v;
     utter.rate = settings.speed;
     utter.onend = ()=>{
-      if(isPlaying){
+      if(isPlaying && myToken === playToken){
         markRangeDone(range);
         currentChunkIndex++;
         playChunkOrSentence();
@@ -796,7 +810,7 @@
     speechSynthesis.speak(utter);
   }
 
-  async function playGoogleChunk(text, range){
+  async function playGoogleChunk(text, range, myToken){
     progressLabel.innerHTML = `<b>Loading voice...</b>`;
     const v = GOOGLE_VOICES.find(g=>g.id === settings.googleVoiceId) || GOOGLE_VOICES[0];
     try{
@@ -810,20 +824,23 @@
           speakingRate: settings.speed
         })
       });
+      // If the user changed voice / skipped while this was loading, abandon it.
+      if(myToken !== playToken || !isPlaying) return;
       if(!res.ok){
         const e = await res.json().catch(()=>({}));
         throw new Error(e.error || ('status ' + res.status));
       }
       const data = await res.json();
-      // audioContent is base64 MP3
+      if(myToken !== playToken || !isPlaying) return; // re-check after awaiting the body
       const audioSrc = 'data:audio/mpeg;base64,' + data.audioContent;
       currentAudio = new Audio(audioSrc);
       currentAudio.onended = ()=>{
-        if(isPlaying){ markRangeDone(range); currentChunkIndex++; playChunkOrSentence(); }
+        if(isPlaying && myToken === playToken){ markRangeDone(range); currentChunkIndex++; playChunkOrSentence(); }
       };
       updateProgress();
       currentAudio.play();
     } catch(err){
+      if(myToken !== playToken) return;
       progressLabel.innerHTML = `<b>Voice error:</b> ${err.message}. Try the system-voice fallback in settings.`;
       isPlaying = false; disc.classList.remove('spinning'); playBtn.textContent = '▶';
     }
