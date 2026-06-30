@@ -195,7 +195,7 @@
 
   <header>
     <div>
-      <a href="index.html" style="text-decoration:none;color:inherit;"><div class="wordmark">NAR<span>RATOR</span>Z</div></a>
+      <div class="wordmark">NAR<span>RATOR</span>Z</div>
       <div class="tagline">Your own audiobook, made from anything</div>
     </div>
     <div class="head-actions">
@@ -233,7 +233,7 @@
   <!-- PLAYER (shared, overlays both views when active) -->
   <div class="player" id="player">
     <div class="deck">
-      <div class="engine-pill" id="enginePill">Free voice</div>
+      <div class="engine-pill" id="enginePill">Good voice</div>
       <div class="disc-wrap">
         <div class="disc" id="disc"></div>
         <div class="tonearm" id="tonearm">
@@ -250,10 +250,10 @@
         <button class="ctrl-btn main" id="playBtn" title="Play / pause">▶</button>
         <button class="ctrl-btn" id="fwdBtn" title="Forward">⟳</button>
       </div>
-      <div class="settings-mini" id="freeVoiceControls">
+      <div class="settings-mini" id="deckControls">
         <div>
-          <label for="voiceSelect">Voice</label>
-          <select id="voiceSelect"></select>
+          <label for="deckVoiceSelect">Voice</label>
+          <select id="deckVoiceSelect"></select>
         </div>
         <div>
           <label for="speedRange">Speed — <span class="speed-val" id="speedVal">1.0×</span></label>
@@ -279,23 +279,24 @@
     <h2>Voice & settings</h2>
 
     <div class="modal-section">
-      <label>Voice engine</label>
-      <div class="engine-toggle">
-        <button id="engineFreeBtn" class="active">Free (system voices)</button>
-        <button id="enginePremiumBtn">Premium (ElevenLabs)</button>
-      </div>
-      <div class="small-note" id="engineNote">Uses your browser/OS voices. Free, works offline, covers many languages — quality varies by device.</div>
+      <label>Narrator voice</label>
+      <select id="googleVoiceSelect"></select>
+      <div class="small-note">Warm, natural voices that sound the same on every device.</div>
     </div>
 
-    <div class="modal-section" id="premiumSection" style="display:none;">
-      <label>ElevenLabs API key</label>
-      <div class="key-row">
-        <input type="password" id="elevenKeyInput" placeholder="Paste your ElevenLabs API key">
-        <button class="btn small" id="elevenKeyBtn">Connect</button>
+    <div class="modal-section">
+      <label>Voice engine</label>
+      <div class="engine-toggle">
+        <button id="engineGoodBtn" class="active">Good voices (recommended)</button>
+        <button id="engineSystemBtn">System voices</button>
       </div>
-      <div class="small-note">Your key is stored only in your own Narratorz library (tied to your account), and is sent directly from your browser to ElevenLabs when you hit play — never through me or Anthropic. Get a key at elevenlabs.io.</div>
-      <div class="status-line muted" id="elevenStatus"></div>
-      <div class="voice-list" id="elevenVoiceList"></div>
+      <div class="small-note" id="engineNote">Warm Narratorz voices, consistent on every device. Needs an internet connection.</div>
+    </div>
+
+    <div class="modal-section" id="systemSection" style="display:none;">
+      <label>System voice (offline fallback)</label>
+      <select id="voiceSelect"></select>
+      <div class="small-note">Your device's built-in voices. Works offline, but quality varies by device.</div>
     </div>
 
     <div class="modal-section">
@@ -332,27 +333,44 @@
 <script>
 (function(){
 
+  // ---------- voice server config ----------
+  // This points at your Cloudflare Worker that holds the Google key.
+  // After you deploy the Worker, replace the URL below with the one Cloudflare gives you.
+  const VOICE_SERVER_URL = "https://narratorz-voice.YOUR-SUBDOMAIN.workers.dev";
+
+  // The warm Google voices offered in the app. languageCode + Google voice name.
+  const GOOGLE_VOICES = [
+    { id: "en-US-Neural2-C", label: "Ava — warm US English (f)", lang: "en-US" },
+    { id: "en-US-Neural2-D", label: "Miles — deep US English (m)", lang: "en-US" },
+    { id: "en-US-Neural2-F", label: "Nora — soft US English (f)", lang: "en-US" },
+    { id: "en-US-Neural2-J", label: "Theo — calm US English (m)", lang: "en-US" },
+    { id: "en-GB-Neural2-A", label: "Iris — British English (f)", lang: "en-GB" },
+    { id: "en-GB-Neural2-B", label: "Oliver — British English (m)", lang: "en-GB" },
+    { id: "es-US-Neural2-A", label: "Lucía — US Spanish (f)", lang: "es-US" },
+    { id: "es-US-Neural2-B", label: "Mateo — US Spanish (m)", lang: "es-US" },
+    { id: "fr-FR-Neural2-A", label: "Camille — French (f)", lang: "fr-FR" },
+    { id: "de-DE-Neural2-B", label: "Lukas — German (m)", lang: "de-DE" },
+  ];
+
   // ---------- state ----------
   let library = [];          // [{id,title,text,lang,sourceType,wordCount,createdAt,lastIndex}]
   let settings = {
-    engine: 'free',
+    engine: 'good',            // 'good' = Google warm voices (default), 'system' = browser fallback
+    googleVoiceId: 'en-US-Neural2-C',
     freeVoiceURI: '',
     speed: 1,
-    elevenKey: '',
-    elevenVoiceId: '',
-    elevenVoiceName: '',
     ocrLang: 'eng'
   };
   let voices = [];
-  let elevenVoices = [];
+
 
   let currentItem = null;    // active library item
   let sentences = [];        // sentence-level (used for highlighting + free engine)
-  let chunks = [];           // larger chunks (used for premium engine playback units)
+  let chunks = [];           // larger chunks (Google) or small (system)
   let chunkSentenceRanges = []; // [start,end) sentence index per chunk
   let currentChunkIndex = 0;
   let isPlaying = false;
-  let currentAudio = null;   // <audio> element for premium playback
+  let currentAudio = null;   // <audio> element for Google playback
 
   // ---------- DOM ----------
   const $ = id => document.getElementById(id);
@@ -363,12 +381,12 @@
   const player = $('player'), reader = $('reader'), readerText = $('readerText'), srcTitle = $('srcTitle');
   const disc = $('disc'), tonearm = $('tonearm'), progressLabel = $('progressLabel'), enginePill = $('enginePill');
   const playBtn = $('playBtn'), backBtn = $('backBtn'), fwdBtn = $('fwdBtn');
-  const voiceSelect = $('voiceSelect'), speedRange = $('speedRange'), speedVal = $('speedVal');
-  const freeVoiceControls = $('freeVoiceControls');
+  const deckVoiceSelect = $('deckVoiceSelect'), speedRange = $('speedRange'), speedVal = $('speedVal');
+  const voiceSelect = $('voiceSelect'); // system-voice fallback select (in settings)
+  const googleVoiceSelect = $('googleVoiceSelect');
   const settingsBtn = $('settingsBtn'), settingsModal = $('settingsModal'), closeSettingsBtn = $('closeSettingsBtn');
-  const engineFreeBtn = $('engineFreeBtn'), enginePremiumBtn = $('enginePremiumBtn'), engineNote = $('engineNote');
-  const premiumSection = $('premiumSection'), elevenKeyInput = $('elevenKeyInput'), elevenKeyBtn = $('elevenKeyBtn');
-  const elevenStatus = $('elevenStatus'), elevenVoiceList = $('elevenVoiceList');
+  const engineGoodBtn = $('engineGoodBtn'), engineSystemBtn = $('engineSystemBtn'), engineNote = $('engineNote');
+  const systemSection = $('systemSection');
   const ocrLangSelect = $('ocrLangSelect');
 
   // ---------- storage helpers ----------
@@ -416,9 +434,24 @@
     });
   });
 
-  // ---------- free voice population ----------
+  // ---------- voice population ----------
+  function populateGoogleVoices(){
+    [deckVoiceSelect, googleVoiceSelect].forEach(sel=>{
+      if(!sel) return;
+      sel.innerHTML = "";
+      GOOGLE_VOICES.forEach(g=>{
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.label;
+        sel.appendChild(opt);
+      });
+      sel.value = settings.googleVoiceId;
+    });
+  }
+
   function loadVoices(){
     voices = speechSynthesis.getVoices();
+    if(!voiceSelect) return;
     voiceSelect.innerHTML = "";
     const sorted = [...voices].sort((a,b)=>{
       const ae = a.lang.startsWith('en') ? 0 : 1;
@@ -432,18 +465,34 @@
       opt.textContent = `${v.name} (${v.lang})`;
       voiceSelect.appendChild(opt);
     });
-    if(settings.freeVoiceURI){
-      voiceSelect.value = settings.freeVoiceURI;
-    }
+    if(settings.freeVoiceURI) voiceSelect.value = settings.freeVoiceURI;
   }
   speechSynthesis.onvoiceschanged = loadVoices;
   loadVoices();
+  populateGoogleVoices();
 
-  voiceSelect.addEventListener('change', ()=>{
-    settings.freeVoiceURI = voiceSelect.value;
+  // deck voice picker drives the Google voice (the main control people see)
+  deckVoiceSelect.addEventListener('change', ()=>{
+    settings.googleVoiceId = deckVoiceSelect.value;
+    if(googleVoiceSelect) googleVoiceSelect.value = deckVoiceSelect.value;
     saveSettings();
     if(isPlaying) playChunkOrSentence();
   });
+  if(googleVoiceSelect){
+    googleVoiceSelect.addEventListener('change', ()=>{
+      settings.googleVoiceId = googleVoiceSelect.value;
+      deckVoiceSelect.value = googleVoiceSelect.value;
+      saveSettings();
+      if(isPlaying) playChunkOrSentence();
+    });
+  }
+  if(voiceSelect){
+    voiceSelect.addEventListener('change', ()=>{
+      settings.freeVoiceURI = voiceSelect.value;
+      saveSettings();
+      if(isPlaying) playChunkOrSentence();
+    });
+  }
   speedRange.addEventListener('input', ()=>{
     settings.speed = parseFloat(speedRange.value);
     speedVal.textContent = settings.speed.toFixed(1) + '×';
@@ -455,11 +504,9 @@
     speedRange.value = settings.speed;
     speedVal.textContent = settings.speed.toFixed(1) + '×';
     ocrLangSelect.value = settings.ocrLang;
+    if(deckVoiceSelect) deckVoiceSelect.value = settings.googleVoiceId;
+    if(googleVoiceSelect) googleVoiceSelect.value = settings.googleVoiceId;
     setEngineUI(settings.engine);
-    if(settings.elevenKey){
-      elevenKeyInput.value = settings.elevenKey;
-      fetchElevenVoices(true);
-    }
   }
 
   // ---------- settings modal ----------
@@ -469,79 +516,23 @@
 
   function setEngineUI(engine){
     settings.engine = engine;
-    if(engine === 'free'){
-      engineFreeBtn.classList.add('active'); enginePremiumBtn.classList.remove('active');
-      premiumSection.style.display = 'none';
-      engineNote.textContent = 'Uses your browser/OS voices. Free, works offline, covers many languages — quality varies by device.';
-      freeVoiceControls.style.display = 'flex';
-      enginePill.textContent = 'Free voice';
+    const voiceLabel = (GOOGLE_VOICES.find(g=>g.id===settings.googleVoiceId)||{}).label || 'Good voice';
+    if(engine === 'system'){
+      engineSystemBtn.classList.add('active'); engineGoodBtn.classList.remove('active');
+      systemSection.style.display = 'block';
+      engineNote.textContent = "Your device's built-in voices. Works offline, but quality varies by device.";
+      enginePill.textContent = 'System voice';
     } else {
-      engineFreeBtn.classList.remove('active'); enginePremiumBtn.classList.add('active');
-      premiumSection.style.display = 'block';
-      engineNote.textContent = 'Studio-quality AI narration via your own ElevenLabs API key. Costs apply on their end based on your plan.';
-      freeVoiceControls.style.display = settings.elevenVoiceId ? 'none' : 'flex';
-      enginePill.textContent = settings.elevenVoiceName ? ('Premium — ' + settings.elevenVoiceName) : 'Premium voice';
+      engineGoodBtn.classList.add('active'); engineSystemBtn.classList.remove('active');
+      systemSection.style.display = 'none';
+      engineNote.textContent = 'Warm Narratorz voices, consistent on every device. Needs an internet connection.';
+      enginePill.textContent = voiceLabel.split(' — ')[0];
     }
   }
-  engineFreeBtn.addEventListener('click', ()=>{ setEngineUI('free'); saveSettings(); if(isPlaying) playChunkOrSentence(); });
-  enginePremiumBtn.addEventListener('click', ()=>{ setEngineUI('premium'); saveSettings(); });
+  engineGoodBtn.addEventListener('click', ()=>{ setEngineUI('good'); saveSettings(); if(isPlaying) playChunkOrSentence(); });
+  engineSystemBtn.addEventListener('click', ()=>{ setEngineUI('system'); saveSettings(); if(isPlaying) playChunkOrSentence(); });
 
   ocrLangSelect.addEventListener('change', ()=>{ settings.ocrLang = ocrLangSelect.value; saveSettings(); });
-
-  elevenKeyBtn.addEventListener('click', ()=>{
-    settings.elevenKey = elevenKeyInput.value.trim();
-    saveSettings();
-    fetchElevenVoices(false);
-  });
-
-  async function fetchElevenVoices(silent){
-    if(!settings.elevenKey){ return; }
-    elevenStatus.textContent = 'Connecting...';
-    elevenStatus.className = 'status-line muted';
-    try{
-      const res = await fetch('https://api.elevenlabs.io/v1/voices', {
-        headers: { 'xi-api-key': settings.elevenKey }
-      });
-      if(!res.ok) throw new Error('Key rejected (status ' + res.status + ')');
-      const data = await res.json();
-      elevenVoices = data.voices || [];
-      elevenStatus.textContent = elevenVoices.length + ' voices available. Tap one to preview & select.';
-      elevenStatus.className = 'status-line';
-      renderElevenVoices();
-    } catch(err){
-      elevenStatus.textContent = 'Could not connect: ' + err.message;
-      elevenStatus.className = 'status-line bad';
-      if(!silent) elevenVoiceList.innerHTML = '';
-    }
-  }
-
-  function renderElevenVoices(){
-    elevenVoiceList.innerHTML = '';
-    elevenVoices.forEach(v=>{
-      const row = document.createElement('div');
-      row.className = 'voice-row' + (v.voice_id === settings.elevenVoiceId ? ' selected' : '');
-      const desc = (v.labels && (v.labels.description || v.labels.accent || v.labels.use_case)) || '';
-      row.innerHTML = `<div class="vname">${escapeHtml(v.name)}<div class="vmeta">${escapeHtml(desc)}</div></div>` +
-        (v.preview_url ? `<button data-preview="${v.preview_url}" title="Preview">▶</button>` : '');
-      row.addEventListener('click', (e)=>{
-        if(e.target.closest('button')) return;
-        settings.elevenVoiceId = v.voice_id;
-        settings.elevenVoiceName = v.name;
-        saveSettings();
-        setEngineUI('premium');
-        renderElevenVoices();
-      });
-      const previewBtn = row.querySelector('button[data-preview]');
-      if(previewBtn){
-        previewBtn.addEventListener('click', (e)=>{
-          e.stopPropagation();
-          const a = new Audio(previewBtn.dataset.preview);
-          a.play();
-        });
-      }
-      elevenVoiceList.appendChild(row);
-    });
-  }
 
   function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -714,7 +705,7 @@
   function openItem(item, text){
     currentItem = item;
     sentences = splitSentences(text);
-    const built = buildChunks(sentences, settings.engine === 'premium' ? 700 : 200);
+    const built = buildChunks(sentences, settings.engine === 'system' ? 200 : 700);
     chunks = built.ch; chunkSentenceRanges = built.ranges;
     currentChunkIndex = chunkIndexForSentence(item.lastIndex || 0);
     srcTitle.textContent = item.title;
@@ -782,14 +773,14 @@
     const range = chunkSentenceRanges[currentChunkIndex];
     highlightSentence(range[0]);
     updateProgress();
-    if(settings.engine === 'premium' && settings.elevenVoiceId && settings.elevenKey){
-      playPremiumChunk(chunks[currentChunkIndex], range);
+    if(settings.engine === 'system'){
+      playSystemChunk(chunks[currentChunkIndex], range);
     } else {
-      playFreeChunk(chunks[currentChunkIndex], range);
+      playGoogleChunk(chunks[currentChunkIndex], range);
     }
   }
 
-  function playFreeChunk(text, range){
+  function playSystemChunk(text, range){
     speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     const v = voices.find(v=>v.voiceURI === voiceSelect.value);
@@ -805,28 +796,35 @@
     speechSynthesis.speak(utter);
   }
 
-  async function playPremiumChunk(text, range){
+  async function playGoogleChunk(text, range){
     progressLabel.innerHTML = `<b>Loading voice...</b>`;
+    const v = GOOGLE_VOICES.find(g=>g.id === settings.googleVoiceId) || GOOGLE_VOICES[0];
     try{
-      const res = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + settings.elevenVoiceId, {
+      const res = await fetch(VOICE_SERVER_URL, {
         method: 'POST',
-        headers: { 'xi-api-key': settings.elevenKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2' })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice: v.id,
+          languageCode: v.lang,
+          speakingRate: settings.speed
+        })
       });
-      if(!res.ok) throw new Error('status ' + res.status);
-      const buf = await res.arrayBuffer();
-      const blob = new Blob([buf], {type:'audio/mpeg'});
-      const url = URL.createObjectURL(blob);
-      currentAudio = new Audio(url);
-      currentAudio.playbackRate = settings.speed;
+      if(!res.ok){
+        const e = await res.json().catch(()=>({}));
+        throw new Error(e.error || ('status ' + res.status));
+      }
+      const data = await res.json();
+      // audioContent is base64 MP3
+      const audioSrc = 'data:audio/mpeg;base64,' + data.audioContent;
+      currentAudio = new Audio(audioSrc);
       currentAudio.onended = ()=>{
-        URL.revokeObjectURL(url);
         if(isPlaying){ markRangeDone(range); currentChunkIndex++; playChunkOrSentence(); }
       };
       updateProgress();
       currentAudio.play();
     } catch(err){
-      progressLabel.innerHTML = `<b>Voice error:</b> ${err.message}`;
+      progressLabel.innerHTML = `<b>Voice error:</b> ${err.message}. Try the system-voice fallback in settings.`;
       isPlaying = false; disc.classList.remove('spinning'); playBtn.textContent = '▶';
     }
   }
