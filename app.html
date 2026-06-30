@@ -336,7 +336,7 @@
   // ---------- voice server config ----------
   // This points at your Cloudflare Worker that holds the Google key.
   // After you deploy the Worker, replace the URL below with the one Cloudflare gives you.
-  const VOICE_SERVER_URL = "https://narratorz-voice.YOUR-SUBDOMAIN.workers.dev";
+  const VOICE_SERVER_URL = "https://narratorz-voice.dyshonjo.workers.dev";
 
   // The warm Google voices offered in the app. languageCode + Google voice name.
   const GOOGLE_VOICES = [
@@ -800,7 +800,7 @@
     progressLabel.innerHTML = `<b>Loading voice...</b>`;
     const v = GOOGLE_VOICES.find(g=>g.id === settings.googleVoiceId) || GOOGLE_VOICES[0];
     try{
-      const res = await fetch(VOICE_SERVER_URL, {https://narratorz-voice.dyshonjo.workers.dev}
+      const res = await fetch(VOICE_SERVER_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
