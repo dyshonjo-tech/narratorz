@@ -684,26 +684,33 @@
   // ---------- sentence/chunk splitting ----------
   function splitSentences(text){
     // Normalize newlines but PRESERVE line breaks so nothing gets swallowed.
-    const normalized = text
+    let normalized = text
       .replace(/\r\n?/g, '\n')
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{2,}/g, '\n')
       .trim();
 
+    // Shield periods that are INSIDE numbers (3.50, 2.5, v1.2) so they aren't
+    // mistaken for sentence-enders. We swap them to a placeholder, split, then
+    // swap back — so decimals never cause dropped or broken lines.
+    const DOT = '\u0000'; // placeholder that won't appear in real text
+    // Loop so multi-dot numbers (v3.4.5, IPs, 1.2.3) are fully shielded.
+    let prev;
+    do { prev = normalized; normalized = normalized.replace(/(\d)\.(\d)/g, '$1' + DOT + '$2'); }
+    while(normalized !== prev);
+
     const out = [];
     normalized.split('\n').forEach(line=>{
       const t = line.trim();
       if(!t) return;
-      // Break after . ! ? … (plus any trailing quote/bracket) followed by space.
-      // The final alternative captures any remainder, so no text is ever dropped.
       const parts = t.match(/[^.!?…]*[.!?…]+["'”’)\]]*(?=\s|$)|[^.!?…]+$/g);
       if(parts){
-        parts.forEach(p=>{ const s = p.trim(); if(s) out.push(s); });
+        parts.forEach(p=>{ const s = p.trim(); if(s) out.push(s.split(DOT).join('.')); });
       } else {
-        out.push(t);
+        out.push(t.split(DOT).join('.'));
       }
     });
-    return out.length ? out : [normalized];
+    return out.length ? out : [normalized.split(DOT).join('.')];
   }
   function buildChunks(sents, targetChars){
     const ch = []; const ranges = [];
