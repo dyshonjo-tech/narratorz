@@ -683,9 +683,27 @@
 
   // ---------- sentence/chunk splitting ----------
   function splitSentences(text){
-    const clean = text.replace(/\s+/g, ' ').trim();
-    const parts = clean.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) || [clean];
-    return parts.map(s=>s.trim()).filter(Boolean);
+    // Normalize newlines but PRESERVE line breaks so nothing gets swallowed.
+    const normalized = text
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
+
+    const out = [];
+    normalized.split('\n').forEach(line=>{
+      const t = line.trim();
+      if(!t) return;
+      // Break after . ! ? … (plus any trailing quote/bracket) followed by space.
+      // The final alternative captures any remainder, so no text is ever dropped.
+      const parts = t.match(/[^.!?…]*[.!?…]+["'”’)\]]*(?=\s|$)|[^.!?…]+$/g);
+      if(parts){
+        parts.forEach(p=>{ const s = p.trim(); if(s) out.push(s); });
+      } else {
+        out.push(t);
+      }
+    });
+    return out.length ? out : [normalized];
   }
   function buildChunks(sents, targetChars){
     const ch = []; const ranges = [];
