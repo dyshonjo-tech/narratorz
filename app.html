@@ -837,7 +837,7 @@
   }
 
   function playSystemChunk(text, range, myToken){
-    const utter = new SpeechSynthesisUtterance(text);
+    const utter = new SpeechSynthesisUtterance(applyPron(text));
     const v = voices.find(v=>v.voiceURI === voiceSelect.value);
     if(v) utter.voice = v;
     utter.rate = settings.speed;
@@ -859,7 +859,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text,
+          text: applyPron(text),
           voice: v.id,
           languageCode: v.lang,
           speakingRate: settings.speed
@@ -917,7 +917,130 @@
 
   // periodically persist progress while playing
   setInterval(()=>{ if(isPlaying && currentItem) saveLibraryIndex(); }, 8000);
+  // ---------- pronunciation dictionary ----------
+let pron = []; // [{word, say}]
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 
+async function pronLoad(){
+  try{
+    if(window.storage){
+      const r = await window.storage.get('pron');
+      if(r && r.value){ pron = JSON.parse(r.value); return; }
+    }
+  }catch(e){}
+  try{
+    const raw = localStorage.getItem('narratorz-pron');
+    if(raw) pron = JSON.parse(raw);
+  }catch(e){}
+}
+async function pronSave(){
+  const json = JSON.stringify(pron);
+  try{ if(window.storage){ await window.storage.set('pron', json); return; } }catch(e){}
+  try{ localStorage.setItem('narratorz-pron', json); }catch(e){}
+}
+
+// Single pass, longest word first, so "Eynubian" is never half-eaten by "Eynubia".
+function applyPron(text){
+  if(!pron.length) return text;
+  const map = new Map();
+  pron.forEach(p=>{ if(p.word && p.say) map.set(p.word.trim().toLowerCase(), p.say.trim()); });
+  if(!map.size) return text;
+  const alt = [...map.keys()].sort((a,b)=>b.length-a.length).map(escapeRe).join('|');
+  const re = new RegExp('\\b(' + alt + ')\\b','gi');
+  return text.replace(re, m => map.get(m.toLowerCase()));
+}
+
+async function previewSpeak(text, raw){
+  const t = raw ? text : applyPron(text);
+  stopPlayback();
+  const pronNote = $('pronNote');
+  const workerReady = VOICE_SERVER_URL && !VOICE_SERVER_URL.includes('YOUR-SUBDOMAIN');
+  if(settings.engine === 'system' || !workerReady){
+    const u = new SpeechSynthesisUtterance(t);
+    const v = voices.find(v=>v.voiceURI === voiceSelect.value);
+    if(v) u.voice = v;
+    u.rate = settings.speed;
+    speechSynthesis.speak(u);
+    return;
+  }
+  const gv = GOOGLE_VOICES.find(g=>g.id === settings.googleVoiceId) || GOOGLE_VOICES[0];
+  try{
+    const res = await fetch(VOICE_SERVER_URL, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text:t, voice:gv.id, languageCode:gv.lang, speakingRate:settings.speed })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('status ' + res.status));
+    currentAudio = new Audio('data:audio/mpeg;base64,' + data.audioContent);
+    currentAudio.play();
+  }catch(err){
+    pronNote.textContent = 'Test failed: ' + err.message;
+  }
+}
+
+function renderPron(){
+  const list = $('pronList');
+  list.innerHTML = '';
+  pron.forEach((p, i)=>{
+    const row = document.createElement('div');
+    row.className = 'voice-row';
+    const name = document.createElement('div');
+    name.className = 'vname';
+    name.textContent = p.word + '  →  ' + p.say;
+    const play = document.createElement('button');
+    play.textContent = '▶';
+    play.title = 'Test';
+    play.addEventListener('click', e=>{ e.stopPropagation(); previewSpeak(p.say, true); });
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.title = 'Delete';
+    del.addEventListener('click', e=>{ e.stopPropagation(); pron.splice(i,1); pronSave(); renderPron(); });
+    row.append(name, play, del);
+    list.appendChild(row);
+  });
+}
+
+$('pronAdd').addEventListener('click', ()=>{
+  const word = $('pronWord').value.trim();
+  const say = $('pronSay').value.trim();
+  if(!word || !say) return;
+  const existing = pron.find(p=>p.word.toLowerCase() === word.toLowerCase());
+  if(existing) existing.say = say; else pron.push({word, say});
+  pronSave(); renderPron();
+  $('pronWord').value = ''; $('pronSay').value = '';
+  $('pronWord').focus();
+});
+$('pronTest').addEventListener('click', ()=>{
+  const say = $('pronSay').value.trim();
+  if(say) previewSpeak(say, true);
+});
+$('pronExport').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(pron, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'narratorz-pronunciations.json';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+});
+$('pronImport').addEventListener('click', ()=> $('pronFile').click());
+$('pronFile').addEventListener('change', async e=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  try{
+    const incoming = JSON.parse(await f.text());
+    incoming.forEach(n=>{
+      if(!n.word || !n.say) return;
+      const ex = pron.find(p=>p.word.toLowerCase() === n.word.toLowerCase());
+      if(ex) ex.say = n.say; else pron.push({word:n.word, say:n.say});
+    });
+    pronSave(); renderPron();
+    $('pronNote').textContent = 'Imported ' + incoming.length + ' entries.';
+  }catch(err){
+    $('pronNote').textContent = "Couldn't read that file.";
+  }
+  e.target.value = '';
+});
+pronLoad().then(renderPron);
   loadAll();
 })();
 </script>
