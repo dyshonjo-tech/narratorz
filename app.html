@@ -314,6 +314,22 @@
     </div>
 
     <div class="modal-close-row">
+      <div class="modal-section">
+  <label>Pronunciations</label>
+  <div class="key-row">
+    <input type="text" id="pronWord" placeholder="Word (Zael)">
+    <input type="text" id="pronSay" placeholder="Sounds like (Zay-ell)">
+  </div>
+  <div class="key-row" style="margin-top:6px; flex-wrap:wrap;">
+    <button class="btn small" id="pronAdd">Add</button>
+    <button class="btn ghost small" id="pronTest">Test</button>
+    <button class="btn ghost small" id="pronExport">Export</button>
+    <button class="btn ghost small" id="pronImport">Import</button>
+    <input type="file" id="pronFile" accept=".json">
+  </div>
+  <div class="voice-list" id="pronList"></div>
+  <div class="small-note" id="pronNote">Whole words only, not case sensitive. Applies to every voice. Use Export to back up or move your list to another browser.</div>
+</div>
       <button class="btn ghost" id="closeSettingsBtn">Done</button>
     </div>
   </div>
